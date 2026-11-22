@@ -25,7 +25,7 @@ import torch
 import viser
 from viser._timeline_api import PROMPT_COLORS
 
-from . import generation
+from . import generation, mmd_support
 from .config import (
     DEFAULT_CUR_DURATION,
     DEMO_UI_INSTRUCTIONS_TAB_MD,
@@ -672,9 +672,9 @@ def create_gui(
                     options=(
                         ["NPZ", "CSV"]
                         if "g1" in model_name.lower()
-                        else ["NPZ", "AMASS NPZ"]
+                        else ["NPZ", "AMASS NPZ", "VMD"]
                         if "smplx" in model_name.lower()
-                        else ["NPZ", "BVH"]
+                        else ["NPZ", "BVH", "VMD"]
                     ),
                     initial_value="NPZ",
                 )
@@ -765,7 +765,7 @@ def create_gui(
                 name = (raw_path or "").strip()
                 if name == "":
                     return f"output{ext}"
-                known_exts = (".npz", ".bvh", ".csv")
+                known_exts = (".npz", ".bvh", ".csv", ".vmd")
                 if name.lower().endswith(known_exts):
                     return os.path.splitext(name)[0] + ext
                 if os.path.splitext(name)[1] == "":
@@ -787,6 +787,13 @@ def create_gui(
                         fps=float(session.model_fps),
                         standard_tpose=bool(gui_save_bvh_standard_tpose_checkbox.value),
                     )
+                elif fmt == "VMD":
+                    save_path = _coerce_save_path(save_path, ext=".vmd")
+                    data = mmd_support.motion_to_vmd_bytes(
+                        session, motion, leg_ik=bool(gui_mmd_leg_ik_checkbox.value)
+                    )
+                    with open(save_path, "wb") as f:
+                        f.write(data)
                 elif fmt == "CSV":
                     save_path = _coerce_save_path(save_path, ext=".csv")
                     data = g1_csv_to_bytes(motion_data, session.skeleton, demo.device)
@@ -1224,6 +1231,149 @@ def create_gui(
                         color="red",
                     )
 
+        with client.gui.add_folder("MMD (PMX / VMD)", expand_by_default=True):
+            gui_mmd_info_markdown = client.gui.add_markdown("PMXモデルは未読み込みです。")
+            gui_mmd_upload_button = client.gui.add_upload_button(
+                "Upload PMX",
+                icon=viser.Icon.UPLOAD,
+                hint="Upload a MikuMikuDance .pmx model to preview the motion on it.",
+            )
+            gui_mmd_path_text = client.gui.add_text(
+                "PMX Path",
+                initial_value="",
+                hint="Path to a .pmx file visible to the demo server (e.g. /workspace/models/model.pmx).",
+                visible=not HF_MODE,
+            )
+            gui_mmd_load_button = client.gui.add_button("Load PMX from Path", visible=not HF_MODE)
+            gui_mmd_show_checkbox = client.gui.add_checkbox("Show PMX", initial_value=True)
+            gui_mmd_leg_ik_checkbox = client.gui.add_checkbox(
+                "Leg IK in VMD",
+                initial_value=True,
+                hint="Key 足ＩＫ/つま先ＩＫ at the retargeted feet (IK stays on). "
+                "Uncheck to write pure FK legs and switch leg IK off in the VMD.",
+            )
+            gui_mmd_download_button = client.gui.add_button(
+                "Download VMD",
+                icon=viser.Icon.DOWNLOAD,
+                hint="Retarget the current motion to the PMX model and download it as .vmd (30 fps).",
+            )
+            gui_mmd_unload_button = client.gui.add_button("Unload PMX")
+
+            def _install_pmx(event_client: viser.ClientHandle, pmx, source: str) -> None:
+                session = get_active_session(event_client)
+                if session is None:
+                    return
+                ge = session.gui_elements
+                n = mmd_support.set_session_pmx(
+                    session,
+                    pmx,
+                    opacity=float(ge.gui_viz_skinned_mesh_opacity_slider.value),
+                    dark_mode=bool(ge.gui_dark_mode_checkbox.value),
+                )
+                if pmx is None:
+                    gui_mmd_info_markdown.content = "PMXモデルは未読み込みです。"
+                    ge.gui_viz_skinned_mesh_checkbox.value = True
+                    return
+                rt = mmd_support.get_retargeter(session)
+                gui_mmd_info_markdown.content = mmd_support.describe_pmx(pmx, rt)
+                if rt is None:
+                    event_client.add_notification(
+                        title="PMX loaded, but not shown",
+                        body="This model's skeleton cannot be mapped to MMD bones (use a SOMA or SMPL-X model).",
+                        auto_close_seconds=8.0,
+                        color="yellow",
+                    )
+                    return
+                # The PMX model overlays the default body mesh; hide the latter.
+                ge.gui_viz_skinned_mesh_checkbox.value = False
+                event_client.add_notification(
+                    title="PMX model loaded",
+                    body=f"{pmx.name or source} ({n} motion(s) retargeted)",
+                    auto_close_seconds=5.0,
+                    color="green",
+                )
+
+            def _report_pmx_error(event_client: viser.ClientHandle, e: Exception) -> None:
+                import traceback
+
+                traceback.print_exc()
+                event_client.add_notification(
+                    title="Failed to load PMX!",
+                    body=str(e),
+                    auto_close_seconds=10.0,
+                    color="red",
+                )
+
+            @gui_mmd_upload_button.on_upload
+            def _(event: viser.GuiEvent) -> None:
+                event_client = event.client
+                uploaded = gui_mmd_upload_button.value
+                try:
+                    if not uploaded.name.lower().endswith(".pmx"):
+                        raise ValueError(f"Not a .pmx file: {uploaded.name}")
+                    pmx = mmd_support.load_pmx_source(uploaded.content)
+                    _install_pmx(event_client, pmx, uploaded.name)
+                except Exception as e:
+                    _report_pmx_error(event_client, e)
+
+            @gui_mmd_load_button.on_click
+            def _(event: viser.GuiEvent) -> None:
+                event_client = event.client
+                try:
+                    path = str(gui_mmd_path_text.value)
+                    pmx = mmd_support.load_pmx_source(path)
+                    _install_pmx(event_client, pmx, os.path.basename(path))
+                except Exception as e:
+                    _report_pmx_error(event_client, e)
+
+            @gui_mmd_unload_button.on_click
+            def _(event: viser.GuiEvent) -> None:
+                _install_pmx(event.client, None, "")
+
+            @gui_mmd_show_checkbox.on_update
+            def _(event: viser.GuiEvent) -> None:
+                session = get_active_session(event.client)
+                if session is None:
+                    return
+                session.pmx_visible = bool(gui_mmd_show_checkbox.value)
+                for motion in session.motions.values():
+                    motion.character.set_pmx_visibility(session.pmx_visible)
+
+            @gui_mmd_download_button.on_click
+            def _(event: viser.GuiEvent) -> None:
+                event_client = event.client
+                session = get_active_session(event_client)
+                if session is None or not session.motions:
+                    return
+                try:
+                    motion = _get_primary_motion(session)
+                    payload = mmd_support.motion_to_vmd_bytes(
+                        session, motion, leg_ik=bool(gui_mmd_leg_ik_checkbox.value)
+                    )
+                    filename = _coerce_download_filename(str(gui_download_name_text.value), ext=".vmd")
+                    _download_bytes_to_browser(
+                        event_client,
+                        data=payload,
+                        filename=filename,
+                        mime_type="application/octet-stream",
+                    )
+                    event_client.add_notification(
+                        title="Download started",
+                        body=f"Saving {filename}",
+                        auto_close_seconds=5.0,
+                        color="green",
+                    )
+                except Exception as e:
+                    import traceback
+
+                    traceback.print_exc()
+                    event_client.add_notification(
+                        title="Failed to export VMD!",
+                        body=str(e),
+                        auto_close_seconds=10.0,
+                        color="red",
+                    )
+
         with client.gui.add_folder("Exports", expand_by_default=False):
             with client.gui.add_folder("Screenshot", expand_by_default=False, visible=not HF_MODE):
                 gui_screenshot_path_text = client.gui.add_text(
@@ -1256,9 +1406,9 @@ def create_gui(
                     options=(
                         ["NPZ", "CSV"]
                         if "g1" in model_name.lower()
-                        else ["NPZ", "AMASS NPZ"]
+                        else ["NPZ", "AMASS NPZ", "VMD"]
                         if "smplx" in model_name.lower()
-                        else ["NPZ", "BVH"]
+                        else ["NPZ", "BVH", "VMD"]
                     ),
                     initial_value="NPZ",
                 )
@@ -1338,8 +1488,8 @@ def create_gui(
                 if "g1" in model_name_lower:
                     return ["NPZ", "CSV"]
                 if "smplx" in model_name_lower:
-                    return ["NPZ", "AMASS NPZ"]
-                return ["NPZ", "BVH"]
+                    return ["NPZ", "AMASS NPZ", "VMD"]
+                return ["NPZ", "BVH", "VMD"]
 
             def _update_format_dropdown(dropdown, loaded_model_name: str) -> None:
                 new_options = _get_motion_export_formats(loaded_model_name)
@@ -1383,7 +1533,7 @@ def create_gui(
                 if name == "":
                     return f"output{ext}"
 
-                known_exts = (".npz", ".bvh", ".csv", ".png", ".mp4")
+                known_exts = (".npz", ".bvh", ".csv", ".vmd", ".png", ".mp4")
                 lower = name.lower()
                 if lower.endswith(known_exts):
                     return os.path.splitext(name)[0] + ext
@@ -1576,6 +1726,12 @@ def create_gui(
                             standard_tpose=bool(gui_download_bvh_standard_tpose_checkbox.value),
                         )
                         mime = "text/plain"
+                    elif fmt == "VMD":
+                        filename = _coerce_download_filename(raw_name, ext=".vmd")
+                        payload = mmd_support.motion_to_vmd_bytes(
+                            session, motion, leg_ik=bool(gui_mmd_leg_ik_checkbox.value)
+                        )
+                        mime = "application/octet-stream"
                     elif fmt == "CSV":
                         filename = _coerce_download_filename(raw_name, ext=".csv")
                         payload = _motion_to_csv_bytes(motion, session)

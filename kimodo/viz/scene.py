@@ -25,6 +25,7 @@ from .coords import rotation_matrix_from_two_vec
 from .g1_rig import (
     G1MeshRig,
 )
+from .pmx_rig import PMXRig
 from .smplx_skin import SMPLXSkin
 from .soma_skin import SOMASkin
 
@@ -363,6 +364,8 @@ class Character:
         self.skin = None
         self.mesh_mode = mesh_mode
         self.g1_mesh_rig = None
+        # Optional PMX (MikuMikuDance) model driven by this character's motion.
+        self.pmx_rig: Optional[PMXRig] = None
         if create_skinned_mesh:
             if isinstance(self.skeleton, (SOMASkeleton30, SOMASkeleton77)) and mesh_mode in [
                 "soma_skin",
@@ -482,6 +485,44 @@ class Character:
             self.skinned_mesh.color = color
         if self.g1_mesh_rig is not None:
             self.g1_mesh_rig.set_color(color)
+        if self.pmx_rig is not None:
+            self.pmx_rig.set_dark_mode(is_dark_mode)
+
+    def attach_pmx(
+        self,
+        retargeter,
+        visible: bool = True,
+        dark_mode: bool = False,
+        opacity: float = 1.0,
+    ) -> None:
+        """Show a PMX model (via an MMDRetargeter) that follows this character."""
+        self.detach_pmx()
+        self.pmx_rig = PMXRig(
+            self.name,
+            self.server,
+            retargeter,
+            dark_mode=dark_mode,
+            visible=visible,
+            opacity=None if opacity >= 1.0 else opacity,
+        )
+        if self.cur_joints_pos is not None and self.cur_joints_rot is not None:
+            try:
+                self.pmx_rig.set_pose(self.cur_joints_pos, self.cur_joints_rot)
+            except Exception:
+                traceback.print_exc()
+
+    def detach_pmx(self) -> None:
+        if self.pmx_rig is not None:
+            self.pmx_rig.clear()
+            self.pmx_rig = None
+
+    def set_pmx_visibility(self, visible: bool) -> None:
+        if self.pmx_rig is not None:
+            self.pmx_rig.set_visibility(visible)
+
+    def precompute_pmx(self, joints_pos: torch.Tensor, joints_rot: torch.Tensor) -> None:
+        if self.pmx_rig is not None:
+            self.pmx_rig.precompute(joints_pos, joints_rot)
 
     def set_skeleton_visibility(self, visible: bool):
         if self.skeleton_mesh is not None:
@@ -504,12 +545,16 @@ class Character:
             self.skinned_mesh.opacity = opacity
         if self.g1_mesh_rig is not None:
             self.g1_mesh_rig.set_opacity(opacity)
+        if self.pmx_rig is not None:
+            self.pmx_rig.set_opacity(opacity)
 
     def set_skinned_mesh_wireframe(self, wireframe: bool):
         if self.skinned_mesh is not None:
             self.skinned_mesh.wireframe = wireframe
         if self.g1_mesh_rig is not None:
             self.g1_mesh_rig.set_wireframe(wireframe)
+        if self.pmx_rig is not None:
+            self.pmx_rig.set_wireframe(wireframe)
 
     def precompute_skinning(self, joints_pos: torch.Tensor, joints_rot: torch.Tensor, chunk_size: int = 64):
         """Precompute skinning for all frames, processing in chunks to avoid OOM.
@@ -535,7 +580,9 @@ class Character:
 
     def update_skinning_cache(self, joints_pos: torch.Tensor, joints_rot: torch.Tensor, frame_idx: int):
         """Update skinning cache for one frame."""
-        if self.skinned_verts_cache is None:
+        if self.pmx_rig is not None:
+            self.pmx_rig.update_cache(joints_pos, joints_rot, frame_idx)
+        if getattr(self, "skinned_verts_cache", None) is None:
             return
         with torch.no_grad():
             new_skinned_verts = self.skin.skin(joints_rot[None], joints_pos[None], rot_is_global=True)[0].cpu().numpy()
@@ -565,6 +612,8 @@ class Character:
             joints_pos_np = joints_pos.detach().cpu().numpy()
             joints_rot_np = joints_rot.detach().cpu().numpy()
             self.g1_mesh_rig.set_pose(joints_pos_np, joints_rot_np)
+        if self.pmx_rig is not None:
+            self.pmx_rig.set_pose(joints_pos, joints_rot, frame_idx=frame_idx)
 
         self.cur_joints_pos = joints_pos
         self.cur_joints_rot = joints_rot
@@ -579,3 +628,4 @@ class Character:
             self.server.scene.remove_by_name(self.skinned_mesh.name)
         if self.g1_mesh_rig is not None:
             self.g1_mesh_rig.clear()
+        self.detach_pmx()

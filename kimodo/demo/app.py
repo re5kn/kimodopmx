@@ -27,7 +27,7 @@ from kimodo.viz.viser_utils import (
 )
 from viser.theme import TitlebarButton, TitlebarConfig, TitlebarImage
 
-from . import generation, ui
+from . import generation, mmd_support, ui
 from .config import (
     DARK_THEME,
     DEFAULT_CUR_DURATION,
@@ -467,6 +467,20 @@ class Demo:
         new_motion = CharacterMotion(new_character, joints_pos, joints_rot, foot_contacts)
         # save the motion in our dict
         session.motions[character_name] = new_motion
+
+        # MikuMikuDance: drive the loaded PMX model with this motion too.
+        if session.pmx_model is not None:
+            try:
+                mmd_support.attach_pmx_to_motion(
+                    session,
+                    new_motion,
+                    opacity=session.gui_elements.gui_viz_skinned_mesh_opacity_slider.value,
+                    dark_mode=session.gui_elements.gui_dark_mode_checkbox.value,
+                )
+            except Exception:
+                import traceback
+
+                traceback.print_exc()
 
         # put the character at the right frame
         new_motion.set_frame(session.frame_idx)

@@ -57,3 +57,7 @@ class ClientSession:
     edit_mode_snapshot: Optional[dict[int, dict[str, object]]] = None
     undo_drag_snapshot: Optional[dict[str, object]] = None
     show_only_current_constraint: bool = False  # False = Show All, True = Show only Current
+    # MikuMikuDance: loaded PMX model, its retargeter for the current skeleton, and options.
+    pmx_model: object | None = None
+    pmx_retargeter: object | None = None
+    pmx_visible: bool = True

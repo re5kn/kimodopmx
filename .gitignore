@@ -158,3 +158,8 @@ onelogger.err
 
 # deploy files
 /helm-library
+
+# MMD models / motions (often not redistributable)
+/models/
+*.pmx
+*.vmd

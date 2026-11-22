@@ -5,6 +5,55 @@
   <a href="https://research.nvidia.com/labs/sil/projects/kimodo/docs/index.html"><img src="https://img.shields.io/badge/docs-online-green.svg" alt="Documentation"></a>
 </p>
 
+> [!NOTE]
+> **このフォークについて（kimodopmx）**
+> [nv-tlabs/kimodo](https://github.com/nv-tlabs/kimodo) に MikuMikuDance 対応を追加したものです。
+> 追加内容は下の「MMD（PMX / VMD）対応」を参照してください。
+
+## MMD（PMX / VMD）対応
+
+デモ（`python -m kimodo.demo`、http://localhost:7860）で生成したモーションを、PMXモデルに載せて確認し、VMDとして書き出せます。
+
+### デモでの使い方
+
+1. 右パネル「Generate」タブの **MMD (PMX / VMD)** を開く
+2. **Upload PMX** でブラウザから `.pmx` を選ぶ（またはコンテナ内のパスを **PMX Path** に入れて **Load PMX from Path**。リポジトリは `/workspace` にマウントされるので、例えば `models/xxx.pmx` に置いたら `/workspace/models/xxx.pmx`）
+3. 読み込むと標準のボディメッシュが非表示になり、PMXモデルが現在のモーションで動きます（**Show PMX** で表示切替。Visualizeタブの Mesh Opacity も効きます）
+4. **Download VMD** で、現在のモーションをそのPMXモデル用のVMDとしてダウンロード（ファイル名は Exports → Motion の Name）。Exports → Motion と Load/Save → Motion の形式にも **VMD** を追加しています
+
+**Leg IK in VMD**（既定オン）：足ＩＫ／つま先ＩＫを足首の位置に合わせてキーを打ちます（IKオンのまま再生できる、MMDで扱いやすい形）。オフにすると足はFKのみで、VMD内でIKをオフにする設定（表示・IKフレーム）を書きます。
+
+### コマンドラインでの変換
+
+```bash
+kimodo_vmd output.npz --pmx /workspace/models/xxx.pmx -o output.vmd
+# python -m kimodo.scripts.npz_to_vmd でも可。--no-leg-ik で足FKのみ
+```
+
+入力は Kimodo の NPZ（`posed_joints` と `global_rot_mats` を含むもの、SOMA 30/77関節・SMPL-X 22関節）。
+
+### 仕組み
+
+- `kimodo/mmd/pmx.py`：PMX 2.0/2.1 リーダー（頂点・ウェイト・面・材質・ボーン）
+- `kimodo/mmd/vmd.py`：VMD リーダー／ライター（Shift-JIS ボーン名、30fps）
+- `kimodo/mmd/retarget.py`：Kimodo骨格 → MMD準標準ボーンへのリターゲット
+  - 右手系（Kimodo, +Z前）→ 左手系（MMD, −Z前）はZ反転で変換
+  - Kimodo の基準姿勢（Tポーズ）と PMX の基準姿勢（Aポーズなど）の差を骨ごとの補正回転で吸収し、グローバル回転を移してから親子関係（付与親を含む）を辿ってローカル回転を求めます
+  - 腕・ひじのねじりは 腕捩・手捩 に分配
+  - 移動は センター に入れ、脚の長さの比でスケール（モデルの大きさに合わせます）
+- `kimodo/viz/pmx_rig.py`：デモ上のPMX表示（GPUスキニング）。VMDと同じリターゲット結果で動かしているので、見えている動きがそのまま書き出されます
+
+対応ボーン：センター、下半身、上半身、上半身2、首、頭、肩、腕、腕捩、ひじ、手捩、手首、各指（０〜３、SOMA77のとき）、足、ひざ、足首、足ＩＫ、つま先ＩＫ。
+
+### 制限
+
+- デモ上のPMX表示はテクスチャなし（単色）、物理・モーフなし。髪やスカートは物理演算を有効にしたMMD側で確認してください
+- 目・表情（モーフ）は出力しません
+- G1（ロボット）モデルは対象外です（SOMA と SMPL-X のみ）
+- 準標準ボーン名（日本語）を持つモデルが対象です
+
+---
+
 ## Overview
 
 Kimodo is a **ki**nematic **mo**tion **d**iffusi**o**n model trained on a large-scale (700 hours) commercially-friendly optical motion capture dataset. The model generates high-quality 3D human and robot motions, and is controlled through text prompts and an extensive set of constraints such as full-body pose keyframes, end-effector positions/rotations, 2D paths, and 2D waypoints. Full details of the model architecture and training are available in the [technical report](https://research.nvidia.com/labs/sil/projects/kimodo/assets/kimodo_tech_report.pdf).

@@ -71,6 +71,9 @@ class CharacterMotion:
         if self.character.skinned_mesh is not None:
             print("Caching skinning info...")
             self.character.precompute_skinning(self.joints_pos, self.joints_rot)
+        if self.character.pmx_rig is not None:
+            print("Retargeting to PMX model...")
+            self.character.precompute_pmx(self.joints_pos, self.joints_rot)
 
     def set_frame(self, idx: int):
         """Sets the pose of the character to the given frame index."""
@@ -166,7 +169,7 @@ class CharacterMotion:
 
         if self.character.skeleton_mesh is not None:
             self.character.skeleton_mesh.update_mesh_info_cache(self.joints_pos[frame_idx], frame_idx)
-        if self.character.skinned_mesh is not None:
+        if self.character.skinned_mesh is not None or self.character.pmx_rig is not None:
             self.character.update_skinning_cache(self.joints_pos[frame_idx], self.joints_rot[frame_idx], frame_idx)
 
     def clear(self):
