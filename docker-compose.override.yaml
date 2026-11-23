@@ -1,0 +1,42 @@
+# Kimodo 公式の docker-compose.yaml に自動で重ねて読み込まれる追加設定
+# （kimodo リポジトリ直下に置く）
+
+services:
+  text-encoder:
+    healthcheck:
+      # 初回は Llama ベースのテキストエンコーダ（十数GB）をダウンロードするため、
+      # その間に unhealthy 扱いにならないよう猶予を長くとる
+      start_period: 60m
+      interval: 10s
+    environment:
+      # VRAM が足りないときは `TEXT_ENCODER_DEVICE=cpu docker compose up ...` で CPU 実行に切り替え
+      - TEXT_ENCODER_DEVICE=${TEXT_ENCODER_DEVICE:-}
+
+  # コマンドラインでまとめて生成するためのサービス（docker compose run --rm cli ... で使う）
+  cli:
+    image: kimodo:1.0
+    profiles: ["cli"]
+    working_dir: /workspace
+    command: bash
+    volumes:
+      - ./:/workspace
+      - ${HOME}/.cache/huggingface:/workspace/.cache/huggingface
+      - ${HOME}/.cache/huggingface/token:/workspace/.cache/huggingface/token:ro
+    environment:
+      - TEXT_ENCODER_URL=http://text-encoder:9550/
+      - HF_HOME=/workspace/.cache/huggingface
+      - HOST_USER=${USER:-user}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    shm_size: "16gb"
+    ipc: host
+    depends_on:
+      text-encoder:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
