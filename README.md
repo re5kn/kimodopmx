@@ -32,6 +32,22 @@ kimodo_vmd output.npz --pmx /workspace/models/xxx.pmx -o output.vmd
 
 入力は Kimodo の NPZ（`posed_joints` と `global_rot_mats` を含むもの、SOMA 30/77関節・SMPL-X 22関節）。
 
+### 生成API（mmd-kimodo 連携）
+
+[mmd-kimodo](https://github.com/re5kn/mmd-kimodo) のモーション作成・編集画面から呼ぶための HTTP API です。プロンプトと長さを受け取り、Kimodo で生成して、送られた PMX 用の VMD を返します。その他のパラメータはデモの既定値（シード 42、Denoising Steps 100、CFG separated 2.0/2.0、Transition frames 5、Post Processing オン、Root Margin 0.04、サンプル数 1、モデルはデモ既定）です。
+
+```bash
+docker compose up -d generator      # text-encoder も一緒に起動。http://localhost:9560
+curl localhost:9560/health          # {"status": "loading" | "ready" | "error", ...}
+curl -F prompt="A person walks forward." -F duration=6 -F pmx=@model.pmx \
+     localhost:9560/generate -o out.vmd
+```
+
+- `POST /generate`（multipart）: `prompt`（英語）, `duration`（2〜10 秒）, `pmx`（ファイル）, `leg_ik`（省略時 true）→ VMD
+- モデル読み込みはサーバー起動時にバックグラウンドで行います。読み込み中の `/generate` は 503
+- 生成は1件ずつ順番に処理します。モデルを変えるときは `KIMODO_MODEL=kimodo-smplx-rp docker compose up -d generator`
+- テスト: `python -m pytest tests/test_generation_server.py`（モデル不要。`MMD_TEST_PMX=xxx.pmx` で実際のリターゲットも確認）
+
 ### 仕組み
 
 - `kimodo/mmd/pmx.py`：PMX 2.0/2.1 リーダー（頂点・ウェイト・面・材質・ボーン）

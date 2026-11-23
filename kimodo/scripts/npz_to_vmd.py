@@ -25,6 +25,25 @@ def _skeleton_for_joint_count(n: int):
     raise ValueError(f"Unsupported joint count {n} (expected SOMA 30/77 or SMPL-X 22).")
 
 
+def motion_to_vmd_bytes(joints_pos, global_rots, pmx, fps: float = 30.0, leg_ik: bool = True):
+    """Retarget one Kimodo motion ([T, J, 3] positions, [T, J, 3, 3] global rotations) to ``pmx``.
+
+    Returns ``(vmd_bytes, retargeter)``. The skeleton is picked from the joint count.
+    """
+    from kimodo.mmd import MMDRetargeter
+
+    joints_pos = np.asarray(joints_pos)
+    global_rots = np.asarray(global_rots)
+    skeleton = _skeleton_for_joint_count(joints_pos.shape[1])
+    rt = MMDRetargeter(
+        pmx,
+        skeleton.bone_order_names,
+        skeleton.joint_parents.cpu().numpy(),
+        skeleton.neutral_joints.cpu().numpy(),
+    )
+    return rt.export_vmd_bytes(global_rots, joints_pos, fps=fps, leg_ik=leg_ik), rt
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description="Retarget a Kimodo NPZ motion to a PMX model and write VMD.")
     p.add_argument("input", help="Kimodo motion .npz (needs posed_joints and global_rot_mats)")
@@ -38,7 +57,7 @@ def main(argv=None) -> None:
     )
     args = p.parse_args(argv)
 
-    from kimodo.mmd import MMDRetargeter, load_pmx
+    from kimodo.mmd import load_pmx
 
     data = np.load(args.input)
     if "posed_joints" not in data or "global_rot_mats" not in data:
@@ -48,15 +67,8 @@ def main(argv=None) -> None:
     if joints_pos.ndim == 4:  # batched output: take the first sample
         joints_pos, global_rots = joints_pos[0], global_rots[0]
 
-    skeleton = _skeleton_for_joint_count(joints_pos.shape[1])
     pmx = load_pmx(args.pmx)
-    rt = MMDRetargeter(
-        pmx,
-        skeleton.bone_order_names,
-        skeleton.joint_parents.cpu().numpy(),
-        skeleton.neutral_joints.cpu().numpy(),
-    )
-    payload = rt.export_vmd_bytes(global_rots, joints_pos, fps=args.fps, leg_ik=not args.no_leg_ik)
+    payload, rt = motion_to_vmd_bytes(joints_pos, global_rots, pmx, fps=args.fps, leg_ik=not args.no_leg_ik)
     out = args.output or os.path.splitext(args.input)[0] + ".vmd"
     with open(out, "wb") as f:
         f.write(payload)
