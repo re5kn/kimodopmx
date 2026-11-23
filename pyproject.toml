@@ -50,6 +50,7 @@ kimodo_demo = "kimodo.demo:main"
 kimodo_textencoder = "kimodo.scripts.run_text_encoder_server:main"
 kimodo_convert = "kimodo.scripts.motion_convert:main"
 kimodo_vmd = "kimodo.scripts.npz_to_vmd:main"
+kimodo_genserver = "kimodo.scripts.run_generation_server:main"
 
 [tool.setuptools]
 include-package-data = true
